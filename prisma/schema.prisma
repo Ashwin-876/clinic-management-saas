@@ -1,0 +1,237 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+  PENDING_VERIFICATION
+  TRIAL
+  SUSPENDED
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  DOCTOR
+  RECEPTIONIST
+  NURSE
+  STAFF
+}
+
+model Clinic {
+  id            String        @id @default(cuid())
+  clinicId      String        @unique // Format: QNX-CLN-000001
+  name          String
+  clinicType    String
+  email         String        @unique // Official Email
+  phone         String
+  address       String
+  city          String
+  state         String
+  pincode       String
+  accountStatus AccountStatus @default(ACTIVE)
+  qrSlug        String?       @unique
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  users            User[]
+  settings         ClinicSettings?
+  auditLogs        AuditLog[]
+  departments      Department[]
+  doctors          Doctor[]
+  patients         Patient[]
+  patientVisits    PatientVisit[]
+  otpVerifications OtpVerification[]
+
+  @@map("clinics")
+}
+
+model User {
+  id           String    @id @default(cuid())
+  clinicId     String    // Tenant Isolation Key
+  clinic       Clinic    @relation(fields: [clinicId], references: [clinicId], onDelete: Cascade)
+  name         String    // Owner / Administrator / Doctor Name
+  email        String    @unique // Login Email
+  mobileNumber String
+  passwordHash String
+  role         Role      @default(ADMIN)
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  doctorProfile Doctor?
+  auditLogs     AuditLog[]
+
+  @@index([clinicId])
+  @@map("users")
+}
+
+model ClinicSettings {
+  id                 String   @id @default(cuid())
+  clinicId           String   @unique // Tenant Isolation Key
+  clinic             Clinic   @relation(fields: [clinicId], references: [clinicId], onDelete: Cascade)
+  timezone           String   @default("Asia/Kolkata")
+  currency           String   @default("INR")
+  slotDuration       Int      @default(15) // Minutes
+  emailNotifications Boolean  @default(true)
+  smsNotifications   Boolean  @default(true)
+  themeMode          String   @default("light")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([clinicId])
+  @@map("clinic_settings")
+}
+
+model ClinicSequence {
+  id         String   @id @default("clinic_sequence")
+  lastNumber Int      @default(0)
+  updatedAt  DateTime @updatedAt
+
+  @@map("clinic_sequences")
+}
+
+model DoctorSequence {
+  id         String   @id @default("doctor_sequence")
+  lastNumber Int      @default(0)
+  updatedAt  DateTime @updatedAt
+
+  @@map("doctor_sequences")
+}
+
+model Department {
+  id          String   @id @default(cuid())
+  clinicId    String   // Tenant Isolation Key
+  clinic      Clinic   @relation(fields: [clinicId], references: [clinicId], onDelete: Cascade)
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  doctors Doctor[]
+
+  @@unique([clinicId, name])
+  @@index([clinicId])
+  @@map("departments")
+}
+
+model Doctor {
+  id              String        @id @default(cuid())
+  doctorId        String        @unique // Generated unique ID: DOC-000001
+  clinicId        String        // Tenant Isolation Key
+  clinic          Clinic        @relation(fields: [clinicId], references: [clinicId], onDelete: Cascade)
+  userId          String?       @unique // Link to User account for individual doctor login
+  user            User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  fullName        String
+  email           String
+  phone           String
+  specialization  String
+  qualification   String
+  experience      Int           @default(0) // Experience in years
+  departmentId    String
+  department      Department    @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  consultationFee Float         @default(500.0)
+  profileImage    String?
+  accountStatus   AccountStatus @default(ACTIVE)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([clinicId])
+  @@index([departmentId])
+  @@map("doctors")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  clinicId  String?  // Scoped to tenant if tenant-specific
+  clinic    Clinic?  @relation(fields: [clinicId], references: [clinicId], onDelete: Cascade)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String
+  entity    String
+  details   String?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([clinicId])
+  @@index([userId])
+  @@map("audit_logs")
+}
+
+model Patient {
+  id               String        @id @default(cuid())
+  patientId        String        @unique // Generated unique ID: PAT-CLN000001-000001
+  clinicId         String        // Tenant Isolation Key
+  clinic           Clinic        @relation(fields: [clinicId], references: [clinicId], onDelete: Cascade)
+  fullName         String
+  mobileNumber     String
+  age              Int?
+  dateOfBirth      DateTime?
+  gender           String?       // Male, Female, Other, etc. (optional)
+  email            String?
+  address          String?
+  emergencyContact String?
+  consentGiven     Boolean       @default(true)
+  totalVisits      Int           @default(1)
+  lastVisitAt      DateTime      @default(now())
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  visits           PatientVisit[]
+
+  @@unique([clinicId, mobileNumber]) // Tenant-isolated unique phone number constraint
+  @@index([clinicId])
+  @@index([mobileNumber])
+  @@map("patients")
+}
+
+model PatientVisit {
+  id                  String   @id @default(cuid())
+  patientId           String
+  patient             Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  clinicId            String   // Tenant Isolation Key
+  clinic              Clinic   @relation(fields: [clinicId], references: [clinicId], onDelete: Cascade)
+  visitDate           DateTime @default(now())
+  registrationChannel String   @default("QR_CODE") // QR_CODE, RECEPTION, DIRECT
+  notes               String?
+  createdAt           DateTime @default(now())
+
+  @@index([clinicId])
+  @@index([patientId])
+  @@map("patient_visits")
+}
+
+model PatientSequence {
+  id         String   @id @default(cuid())
+  clinicId   String   @unique // Per-clinic sequential counter
+  lastNumber Int      @default(0)
+  updatedAt  DateTime @updatedAt
+
+  @@map("patient_sequences")
+}
+
+model OtpVerification {
+  id           String    @id @default(cuid())
+  clinicId     String
+  clinic       Clinic    @relation(fields: [clinicId], references: [clinicId], onDelete: Cascade)
+  mobileNumber String
+  otpCode      String
+  token        String?   @unique
+  expiresAt    DateTime
+  verified     Boolean   @default(false)
+  attempts     Int       @default(0)
+  createdAt    DateTime  @default(now())
+
+  @@index([clinicId, mobileNumber])
+  @@map("otp_verifications")
+}
+
